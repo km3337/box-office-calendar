@@ -1,67 +1,134 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { UpcomingOutlook } from "@/components/UpcomingOutlook";
 import { WeekNavigator } from "@/components/WeekNavigator";
 import { WeeklyChart } from "@/components/WeeklyChart";
-import { getSamplePastWeek } from "@/data/sampleWeeks";
+import { WeeklyHighlights } from "@/components/WeeklyHighlights";
 import {
   currentWeekOf,
   isPastWeek,
+  parseDateKey,
   startOfWeekSunday,
   toDateKey,
 } from "@/lib/week";
-import type { FutureDay } from "@/types/movie";
-import type { ReleaseScheduleResponse } from "@/types/the-numbers";
+import type { FutureDay, PastDay } from "@/types/movie";
+import type {
+  BoxOfficeWeekResponse,
+  ReleaseScheduleResponse,
+} from "@/types/the-numbers";
 
 export function HomePage() {
-  const [weekOf, setWeekOf] = useState(currentWeekOf);
+  const [weekStartKey, setWeekStartKey] = useState(() =>
+    toDateKey(currentWeekOf()),
+  );
+  const weekOf = useMemo(() => parseDateKey(weekStartKey), [weekStartKey]);
+
+  const [pastWeek, setPastWeek] = useState<PastDay[]>([]);
   const [futureWeek, setFutureWeek] = useState<FutureDay[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loadingBoxOffice, setLoadingBoxOffice] = useState(true);
+  const [loadingReleases, setLoadingReleases] = useState(true);
+  const [boxOfficeError, setBoxOfficeError] = useState<string | null>(null);
+  const [releasesError, setReleasesError] = useState<string | null>(null);
 
   const viewingPast = isPastWeek(weekOf);
 
-  const loadReleases = useCallback(async (anchor: Date, signal: AbortSignal) => {
-    const weekQuery = toDateKey(startOfWeekSunday(anchor));
-    const response = await fetch(`/api/releases?week=${weekQuery}`, { signal });
-
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      throw new Error(
-        typeof body.error === "string"
-          ? body.error
-          : "Failed to load release schedule",
-      );
-    }
-
-    const data: ReleaseScheduleResponse = await response.json();
-    return data.futureWeek ?? [];
-  }, []);
-
-  useEffect(() => {
-    if (viewingPast) return;
-
-    const controller = new AbortController();
-    setLoading(true);
-    setError(null);
-
-    loadReleases(weekOf, controller.signal)
-      .then(setFutureWeek)
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
-        setFutureWeek([]);
-        setError(err instanceof Error ? err.message : "Something went wrong");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
+  const loadBoxOffice = useCallback(
+    async (weekKey: string, signal: AbortSignal) => {
+      const response = await fetch(`/api/box-office?week=${weekKey}`, {
+        signal,
       });
 
-    return () => controller.abort();
-  }, [weekOf, viewingPast, loadReleases]);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(
+          typeof body.error === "string"
+            ? body.error
+            : "Failed to load box office data",
+        );
+      }
+
+      const data: BoxOfficeWeekResponse = await response.json();
+      return data;
+    },
+    [],
+  );
+
+  const loadReleases = useCallback(
+    async (weekKey: string, signal: AbortSignal) => {
+      const response = await fetch(`/api/releases?week=${weekKey}`, { signal });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(
+          typeof body.error === "string"
+            ? body.error
+            : "Failed to load release schedule",
+        );
+      }
+
+      const data: ReleaseScheduleResponse = await response.json();
+      return data.futureWeek ?? [];
+    },
+    [],
+  );
+
+  const fetchGenerationRef = useRef(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const generation = ++fetchGenerationRef.current;
+    const requestedWeekKey = weekStartKey;
+
+    const isStale = () => fetchGenerationRef.current !== generation;
+
+    setLoadingBoxOffice(true);
+    setLoadingReleases(true);
+    setBoxOfficeError(null);
+    setReleasesError(null);
+
+    loadBoxOffice(requestedWeekKey, controller.signal)
+      .then((data) => {
+        if (isStale() || data.weekOf !== requestedWeekKey) return;
+        setPastWeek(data.pastWeek ?? []);
+      })
+      .catch((err: unknown) => {
+        if (isStale() || controller.signal.aborted) return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setBoxOfficeError(
+          err instanceof Error ? err.message : "Something went wrong",
+        );
+      })
+      .finally(() => {
+        if (!isStale()) setLoadingBoxOffice(false);
+      });
+
+    loadReleases(requestedWeekKey, controller.signal)
+      .then((data) => {
+        if (isStale()) return;
+        setFutureWeek(data);
+      })
+      .catch((err: unknown) => {
+        if (isStale() || controller.signal.aborted) return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setReleasesError(
+          err instanceof Error ? err.message : "Something went wrong",
+        );
+      })
+      .finally(() => {
+        if (!isStale()) setLoadingReleases(false);
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [weekStartKey, loadBoxOffice, loadReleases]);
 
   const handleWeekChange = (next: Date) => {
-    setWeekOf(startOfWeekSunday(next));
+    setWeekStartKey(toDateKey(startOfWeekSunday(next)));
   };
+
+  const error = viewingPast ? boxOfficeError : releasesError;
 
   return (
     <div className="min-h-full bg-zinc-50 font-sans dark:bg-zinc-950">
@@ -78,31 +145,42 @@ export function HomePage() {
 
         <WeekNavigator weekOf={weekOf} onWeekChange={handleWeekChange} />
 
-        <div className="mt-10">
+        <div className="mt-10 space-y-10">
+          {error && (
+            <p
+              className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/50 dark:text-red-200"
+              role="alert"
+            >
+              {error}
+            </p>
+          )}
           {viewingPast ? (
-            <WeeklyChart
-              mode="past"
-              weekOf={weekOf}
-              pastWeek={getSamplePastWeek(weekOf)}
-            />
+            <>
+              <WeeklyChart
+                key={weekStartKey}
+                mode="past"
+                weekOf={weekOf}
+                loading={loadingBoxOffice}
+                pastWeek={pastWeek}
+              />
+              <WeeklyHighlights
+                weekOf={weekOf}
+                pastWeek={pastWeek}
+                loading={loadingBoxOffice}
+              />
+            </>
           ) : (
             <>
-              {loading && (
-                <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
-                  Loading releases…
-                </p>
-              )}
-              {error && (
-                <p
-                  className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/50 dark:text-red-200"
-                  role="alert"
-                >
-                  {error}
-                </p>
-              )}
+              <UpcomingOutlook
+                weekOf={weekOf}
+                futureWeek={futureWeek}
+                loading={loadingReleases}
+              />
               <WeeklyChart
+                key={weekStartKey}
                 mode="future"
                 weekOf={weekOf}
+                loading={loadingReleases}
                 futureWeek={futureWeek}
               />
             </>

@@ -6,6 +6,12 @@ export function toDateKey(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
+/** Parse YYYY-MM-DD as local midnight — never use `new Date(isoDate)` (UTC). */
+export function parseDateKey(key: string): Date {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
 export function startOfWeekSunday(date: Date): Date {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);

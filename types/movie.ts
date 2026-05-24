@@ -3,6 +3,8 @@ export type Movie = {
   id: string;
   title: string;
   genre: string;
+  /** Poster image URL from The Numbers (when enriched). */
+  posterUrl?: string;
   /** Lifetime box office before this week; omit or 0 for first-time releases. */
   boxOfficeToDate?: number;
 };

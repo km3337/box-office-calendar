@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { enrichFutureWeek } from "@/lib/the-numbers/enrichMovies";
 import { getReleaseSchedule, RELEASE_SCHEDULE_URL } from "@/lib/the-numbers/getReleaseSchedule";
 import { releasesToFutureWeek } from "@/lib/the-numbers/scrapeReleaseSchedule";
+import { parseDateKey, startOfWeekSunday } from "@/lib/week";
 import type { ReleaseScheduleResponse } from "@/types/the-numbers";
 
 export const runtime = "nodejs";
@@ -43,14 +45,18 @@ export async function GET(request: NextRequest) {
     };
 
     if (weekParam) {
-      const weekOf = new Date(weekParam);
-      if (Number.isNaN(weekOf.getTime())) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(weekParam)) {
         return NextResponse.json(
-          { error: "Invalid week query parameter (use ISO date)" },
+          { error: "Invalid week query parameter (use YYYY-MM-DD)" },
           { status: 400 },
         );
       }
-      body.futureWeek = releasesToFutureWeek(releases, weekOf);
+      body.futureWeek = await enrichFutureWeek(
+        releasesToFutureWeek(
+          releases,
+          startOfWeekSunday(parseDateKey(weekParam)),
+        ),
+      );
     }
 
     return NextResponse.json(body, {

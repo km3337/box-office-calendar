@@ -17,3 +17,9 @@ export type ReleaseScheduleResponse = {
   releases: ScrapedRelease[];
   futureWeek?: import("@/types/movie").FutureDay[];
 };
+
+export type BoxOfficeWeekResponse = {
+  weekOf: string;
+  scrapedAt: string;
+  pastWeek: import("@/types/movie").PastDay[];
+};
